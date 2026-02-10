@@ -1,6 +1,4 @@
 -- https://www.roblox.com/games/127794225497302/Abyss
--- t.me/arceusxcommunity
-
 -------------------------
 -- GLOBAL TOGGLES
 -------------------------
