@@ -1,15 +1,21 @@
 -- https://www.roblox.com/games/127794225497302/Abyss
-
 -------------------------------------------------
 -- GLOBAL SETTINGS
 -------------------------------------------------
 getgenv().toggleChests = getgenv().toggleChests or false
-getgenv().toggleFish   = getgenv().toggleFish or false
+getgenv().toggleFish   = getgenv().toggleFish   or false
+getgenv().AutoReel     = getgenv().AutoReel     or false
 
 getgenv().FishESP_Filter = getgenv().FishESP_Filter or {
     ShowNormal = true,
     ShowShiny  = true,
     MinStars   = 1
+}
+
+getgenv().AutoReel_Keywords = {
+    "reel",
+    "pull",
+    "catch"
 }
 
 -------------------------------------------------
@@ -18,6 +24,7 @@ getgenv().FishESP_Filter = getgenv().FishESP_Filter or {
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
+local PlayerGui = player:WaitForChild("PlayerGui")
 
 local gameWork = workspace:FindFirstChild("Game")
 local chests = gameWork and gameWork:FindFirstChild("Chests")
@@ -54,7 +61,7 @@ local function clearESP(kind)
         end
     end
 
-    for _, v in pairs(workspace:GetDescendants()) do
+    for _, v in ipairs(workspace:GetDescendants()) do
         if v:IsA("BillboardGui") and v.Name == uiName then
             v:Destroy()
         end
@@ -117,9 +124,7 @@ local function applyFishESP(fish)
         and stat.Fish.Text
         or fish.Name
 
-    -----------------------
-    -- MUTATION CHECK
-    -----------------------
+    -- Mutation
     local mutation = "Normal"
     local mutationFrame = stat:FindFirstChild("Mutation")
     if mutationFrame then
@@ -129,29 +134,14 @@ local function applyFishESP(fish)
         end
     end
 
-    -----------------------
-    -- RARITY
-    -----------------------
+    -- Rarity
     local stars = getRarityStars(stat)
 
-    -----------------------
-    -- FILTERS
-    -----------------------
-    if mutation == "Normal" and not getgenv().FishESP_Filter.ShowNormal then
-        return
-    end
+    -- Filters
+    if mutation == "Normal" and not getgenv().FishESP_Filter.ShowNormal then return end
+    if mutation == "Shiny"  and not getgenv().FishESP_Filter.ShowShiny  then return end
+    if stars < getgenv().FishESP_Filter.MinStars then return end
 
-    if mutation == "Shiny" and not getgenv().FishESP_Filter.ShowShiny then
-        return
-    end
-
-    if stars < getgenv().FishESP_Filter.MinStars then
-        return
-    end
-
-    -----------------------
-    -- TEXT FORMAT
-    -----------------------
     local mutationText =
         mutation == "Shiny"
         and "<font color='#FFD700'>Shiny</font>"
@@ -170,14 +160,14 @@ local function applyFishESP(fish)
 end
 
 -------------------------------------------------
--- CHEST ESP APPLY
+-- CHEST ESP
 -------------------------------------------------
 local function applyChestESP()
     clearESP("CHEST")
     if not getgenv().toggleChests or not chests then return end
 
-    for _, folder in pairs(chests:GetChildren()) do
-        for _, chest in pairs(folder:GetChildren()) do
+    for _, folder in ipairs(chests:GetChildren()) do
+        for _, chest in ipairs(folder:GetChildren()) do
             createESP(
                 chest,
                 chest.Name,
@@ -190,14 +180,61 @@ local function applyChestESP()
 end
 
 -------------------------------------------------
+-- AUTO REEL (UI-BASED)
+-------------------------------------------------
+local lastReel = 0
+local REEL_COOLDOWN = 0.25
+
+local function isReelButton(obj)
+    if not obj:IsA("TextButton") then return false end
+    if not obj.Visible or not obj.Text then return false end
+
+    local text = string.lower(obj.Text)
+    for _, k in ipairs(getgenv().AutoReel_Keywords) do
+        if string.find(text, k) then
+            return true
+        end
+    end
+    return false
+end
+
+local function tryAutoReel(btn)
+    if not getgenv().AutoReel then return end
+    if tick() - lastReel < REEL_COOLDOWN then return end
+
+    lastReel = tick()
+    pcall(function()
+        firesignal(btn.MouseButton1Click)
+    end)
+end
+
+PlayerGui.DescendantAdded:Connect(function(obj)
+    if getgenv().AutoReel and isReelButton(obj) then
+        task.wait(0.05)
+        tryAutoReel(obj)
+    end
+end)
+
+task.spawn(function()
+    while task.wait(0.5) do
+        if not getgenv().AutoReel then continue end
+        for _, v in ipairs(PlayerGui:GetDescendants()) do
+            if isReelButton(v) then
+                tryAutoReel(v)
+            end
+        end
+    end
+end)
+
+-------------------------------------------------
 -- UI
 -------------------------------------------------
-local gui = Instance.new("ScreenGui", player.PlayerGui)
+local gui = Instance.new("ScreenGui", PlayerGui)
 gui.Name = "ESP_UI"
 gui.ResetOnSpawn = false
 
 local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0,210,0,160)
+frame.Size = UDim2.new(0,220,0,190)
 frame.Position = UDim2.new(0,20,0,200)
 frame.BackgroundColor3 = Color3.fromRGB(25,25,25)
 frame.BorderSizePixel = 0
@@ -284,12 +321,16 @@ createToggle("Fish ESP", 80, function()
     clearESP("FISH")
 
     if getgenv().toggleFish and fishes then
-        for _, fish in pairs(fishes:GetChildren()) do
+        for _, fish in ipairs(fishes:GetChildren()) do
             applyFishESP(fish)
         end
     end
-
     return getgenv().toggleFish
+end)
+
+createToggle("Auto Reel", 120, function()
+    getgenv().AutoReel = not getgenv().AutoReel
+    return getgenv().AutoReel
 end)
 
 -------------------------------------------------
