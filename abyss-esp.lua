@@ -1,58 +1,45 @@
 -- https://www.roblox.com/games/127794225497302/Abyss
--------------------------------------------------
--- GLOBAL SETTINGS
--------------------------------------------------
+
+-------------------------
+-- GLOBAL TOGGLES
+-------------------------
 getgenv().toggleChests = getgenv().toggleChests or false
-getgenv().toggleFish   = getgenv().toggleFish   or false
-getgenv().AutoReel     = getgenv().AutoReel     or false
+getgenv().toggleFish   = getgenv().toggleFish or false
 
-getgenv().FishESP_Filter = getgenv().FishESP_Filter or {
-    ShowNormal = true,
-    ShowShiny  = true,
-    MinStars   = 1
-}
-
-getgenv().AutoReel_Keywords = {
-    "reel",
-    "pull",
-    "catch"
-}
-
--------------------------------------------------
--- SERVICES
--------------------------------------------------
+-------------------------
+-- SERVICES & PATHS
+-------------------------
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
-local PlayerGui = player:WaitForChild("PlayerGui")
 
-local gameWork = workspace:FindFirstChild("Game")
+local gameWork = game:GetService("Workspace"):FindFirstChild("Game")
 local chests = gameWork and gameWork:FindFirstChild("Chests")
-local fishes = gameWork
-    and gameWork:FindFirstChild("Fish")
-    and gameWork.Fish:FindFirstChild("client")
+local fishes = gameWork and gameWork:FindFirstChild("Fish") and gameWork.Fish:FindFirstChild("client")
 
--------------------------------------------------
+-------------------------
 -- COLORS
--------------------------------------------------
+-------------------------
 local tierColors = {
-    ["Tier 1"] = Color3.fromRGB(0,255,0),
-    ["Tier 2"] = Color3.fromRGB(255,255,0),
-    ["Tier 3"] = Color3.fromRGB(255,0,0)
+    ["Tier 1"] = Color3.fromRGB(0, 255, 0),
+    ["Tier 2"] = Color3.fromRGB(255, 255, 0),
+    ["Tier 3"] = Color3.fromRGB(255, 0, 0)
 }
 
--------------------------------------------------
+-------------------------
 -- ESP STORAGE
--------------------------------------------------
+-------------------------
 getgenv().ESP_Table = getgenv().ESP_Table or {
+    ChestConnections = {},
+    FishConnections = {},
     CreatedUI = {}
 }
 
--------------------------------------------------
+-------------------------
 -- CLEAR ESP
--------------------------------------------------
-local function clearESP(kind)
-    local uiName = kind == "FISH" and "FISH_UI" or "CHEST_UI"
+-------------------------
+local function clearESP(type)
+    local uiName = type == "FISH" and "FISH_UI" or "CHEST_UI"
 
     for obj, ui in pairs(getgenv().ESP_Table.CreatedUI) do
         if ui and ui.Name == uiName then
@@ -61,210 +48,100 @@ local function clearESP(kind)
         end
     end
 
-    for _, v in ipairs(workspace:GetDescendants()) do
+    for _, v in pairs(workspace:GetDescendants()) do
         if v:IsA("BillboardGui") and v.Name == uiName then
             v:Destroy()
         end
     end
 end
 
--------------------------------------------------
+-------------------------
 -- CREATE ESP
--------------------------------------------------
-local function createESP(obj, title, subtitle, color, uiName)
+-------------------------
+local function createESP(obj, text, subtext, color, uiName)
     if not obj or getgenv().ESP_Table.CreatedUI[obj] then return end
 
-    local gui = Instance.new("BillboardGui")
-    gui.Name = uiName
-    gui.Size = UDim2.new(0,170,0,50)
-    gui.StudsOffset = Vector3.new(0,3,0)
-    gui.AlwaysOnTop = true
-    gui.Parent = obj
+    local bbg = Instance.new("BillboardGui")
+    bbg.Name = uiName
+    bbg.Size = UDim2.new(0, 160, 0, 50)
+    bbg.StudsOffset = Vector3.new(0, 3, 0)
+    bbg.AlwaysOnTop = true
+    bbg.Parent = obj
 
     local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1,0,1,0)
+    label.Size = UDim2.new(1, 0, 1, 0)
     label.BackgroundTransparency = 1
     label.RichText = true
-    label.Text = title .. "\n[" .. subtitle .. "]"
+    label.Text = text .. "\n[" .. subtext .. "]"
     label.TextColor3 = color
     label.TextStrokeTransparency = 0
     label.Font = Enum.Font.RobotoMono
     label.TextSize = 14
-    label.Parent = gui
+    label.Parent = bbg
 
-    getgenv().ESP_Table.CreatedUI[obj] = gui
+    getgenv().ESP_Table.CreatedUI[obj] = bbg
 end
 
--------------------------------------------------
--- RARITY STAR DETECTION (UI-BASED)
--------------------------------------------------
-local function getRarityStars(stat)
-    local rarity = stat:FindFirstChild("Rarity")
-    if not rarity then return 1 end
-
-    local label = rarity:FindFirstChildOfClass("TextLabel")
-    if not label or typeof(label.Text) ~= "string" then
-        return 1
-    end
-
-    local _, count = string.gsub(label.Text, "⭐", "")
-    return math.clamp(count, 1, 5)
-end
-
--------------------------------------------------
+-------------------------
 -- FISH ESP
--------------------------------------------------
+-------------------------
 local function applyFishESP(fish)
     if not fish or not getgenv().toggleFish then return end
 
     local stat = fish:FindFirstChild("stats", true)
     if not stat then return end
 
-    local name = stat:FindFirstChild("Fish")
-        and stat.Fish.Text
-        or fish.Name
+    local name = stat:FindFirstChild("Fish") and stat.Fish.Text or fish.Name
+    local mut = stat:FindFirstChild("Mutation") and stat.Mutation:FindFirstChildOfClass("TextLabel")
+    local mutation = mut and mut.Text or "Normal"
 
-    -- Mutation
-    local mutation = "Normal"
-    local mutationFrame = stat:FindFirstChild("Mutation")
-    if mutationFrame then
-        local label = mutationFrame:FindFirstChildOfClass("TextLabel")
-        if label and string.find(label.Text, "Shiny") then
-            mutation = "Shiny"
-        end
-    end
+    local coloredMutation = "<font color='#FFFF00'>" .. mutation .. "</font>"
 
-    -- Rarity
-    local stars = getRarityStars(stat)
-
-    -- Filters
-    if mutation == "Normal" and not getgenv().FishESP_Filter.ShowNormal then return end
-    if mutation == "Shiny"  and not getgenv().FishESP_Filter.ShowShiny  then return end
-    if stars < getgenv().FishESP_Filter.MinStars then return end
-
-    local mutationText =
-        mutation == "Shiny"
-        and "<font color='#FFD700'>Shiny</font>"
-        or "<font color='#AAAAAA'>Normal</font>"
-
-    local rarityText =
-        "<font color='#FFD700'>" .. string.rep("⭐", stars) .. "</font>"
-
-    createESP(
-        fish,
-        name,
-        mutationText .. " " .. rarityText,
-        Color3.fromRGB(0,255,255),
-        "FISH_UI"
-    )
+    createESP(fish, name, coloredMutation, Color3.fromRGB(0,255,255), "FISH_UI")
 end
 
--------------------------------------------------
--- CHEST ESP
--------------------------------------------------
-local function applyChestESP()
-    clearESP("CHEST")
-    if not getgenv().toggleChests or not chests then return end
-
-    for _, folder in ipairs(chests:GetChildren()) do
-        for _, chest in ipairs(folder:GetChildren()) do
-            createESP(
-                chest,
-                chest.Name,
-                folder.Name,
-                tierColors[folder.Name] or Color3.new(1,1,1),
-                "CHEST_UI"
-            )
-        end
-    end
-end
-
--------------------------------------------------
--- AUTO REEL (UI-BASED)
--------------------------------------------------
-local lastReel = 0
-local REEL_COOLDOWN = 0.25
-
-local function isReelButton(obj)
-    if not obj:IsA("TextButton") then return false end
-    if not obj.Visible or not obj.Text then return false end
-
-    local text = string.lower(obj.Text)
-    for _, k in ipairs(getgenv().AutoReel_Keywords) do
-        if string.find(text, k) then
-            return true
-        end
-    end
-    return false
-end
-
-local function tryAutoReel(btn)
-    if not getgenv().AutoReel then return end
-    if tick() - lastReel < REEL_COOLDOWN then return end
-
-    lastReel = tick()
-    pcall(function()
-        firesignal(btn.MouseButton1Click)
-    end)
-end
-
-PlayerGui.DescendantAdded:Connect(function(obj)
-    if getgenv().AutoReel and isReelButton(obj) then
-        task.wait(0.05)
-        tryAutoReel(obj)
-    end
-end)
-
-task.spawn(function()
-    while task.wait(0.5) do
-        if not getgenv().AutoReel then continue end
-        for _, v in ipairs(PlayerGui:GetDescendants()) do
-            if isReelButton(v) then
-                tryAutoReel(v)
-            end
-        end
-    end
-end)
-
--------------------------------------------------
--- UI
--------------------------------------------------
-local gui = Instance.new("ScreenGui", PlayerGui)
+-------------------------
+-- UI SETUP
+-------------------------
+local gui = Instance.new("ScreenGui")
 gui.Name = "ESP_UI"
 gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
 
-local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0,220,0,190)
-frame.Position = UDim2.new(0,20,0,200)
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 200, 0, 140)
+frame.Position = UDim2.new(0, 20, 0, 200)
 frame.BackgroundColor3 = Color3.fromRGB(25,25,25)
 frame.BorderSizePixel = 0
+frame.Parent = gui
 
-local title = Instance.new("TextLabel", frame)
+local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,0,0,30)
 title.BackgroundColor3 = Color3.fromRGB(40,40,40)
-title.Text = "ESP SETTINGS"
+title.Text = "ESP TOGGLES"
 title.TextColor3 = Color3.new(1,1,1)
 title.Font = Enum.Font.RobotoMono
 title.TextSize = 14
+title.Parent = frame
 
--------------------------------------------------
--- DRAGGING
--------------------------------------------------
+-------------------------
+-- DRAG LOGIC
+-------------------------
 local dragging, dragStart, startPos
 
-title.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1
-    or i.UserInputType == Enum.UserInputType.Touch then
+title.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
-        dragStart = i.Position
+        dragStart = input.Position
         startPos = frame.Position
     end
 end)
 
-UserInputService.InputChanged:Connect(function(i)
-    if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
-    or i.UserInputType == Enum.UserInputType.Touch) then
-        local delta = i.Position - dragStart
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+    or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
         frame.Position = UDim2.new(
             startPos.X.Scale,
             startPos.X.Offset + delta.X,
@@ -274,24 +151,26 @@ UserInputService.InputChanged:Connect(function(i)
     end
 end)
 
-UserInputService.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1
-    or i.UserInputType == Enum.UserInputType.Touch then
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
         dragging = false
     end
 end)
 
--------------------------------------------------
--- TOGGLE BUTTON
--------------------------------------------------
-local function createToggle(text, y, callback)
-    local btn = Instance.new("TextButton", frame)
-    btn.Size = UDim2.new(1,-20,0,34)
-    btn.Position = UDim2.new(0,10,0,y)
-    btn.Font = Enum.Font.RobotoMono
-    btn.TextSize = 13
-    btn.BorderSizePixel = 0
+-------------------------
+-- TOGGLE BUTTONS
+-------------------------
+local function createToggle(text, posY, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1,-20,0,36)
+    btn.Position = UDim2.new(0,10,0,posY)
+    btn.BackgroundColor3 = Color3.fromRGB(120,0,0)
     btn.TextColor3 = Color3.new(1,1,1)
+    btn.Font = Enum.Font.RobotoMono
+    btn.TextSize = 14
+    btn.BorderSizePixel = 0
+    btn.Parent = frame
 
     local function refresh(state)
         btn.Text = text .. ": " .. (state and "ON" or "OFF")
@@ -303,51 +182,66 @@ local function createToggle(text, y, callback)
     refresh(false)
 
     btn.MouseButton1Click:Connect(function()
-        refresh(callback())
+        local state = callback()
+        refresh(state)
     end)
 end
 
--------------------------------------------------
--- BUTTONS
--------------------------------------------------
+-------------------------
+-- CHEST TOGGLE
+-------------------------
 createToggle("Chest ESP", 40, function()
     getgenv().toggleChests = not getgenv().toggleChests
-    applyChestESP()
+    clearESP("CHEST")
+
+    if getgenv().toggleChests and chests then
+        for _, folder in pairs(chests:GetChildren()) do
+            for _, chest in pairs(folder:GetChildren()) do
+                createESP(
+                    chest,
+                    chest.Name,
+                    folder.Name,
+                    tierColors[folder.Name] or Color3.new(1,1,1),
+                    "CHEST_UI"
+                )
+            end
+        end
+    end
+
     return getgenv().toggleChests
 end)
 
-createToggle("Fish ESP", 80, function()
+-------------------------
+-- FISH TOGGLE
+-------------------------
+createToggle("Fish ESP", 85, function()
     getgenv().toggleFish = not getgenv().toggleFish
     clearESP("FISH")
 
     if getgenv().toggleFish and fishes then
-        for _, fish in ipairs(fishes:GetChildren()) do
+        for _, fish in pairs(fishes:GetChildren()) do
             applyFishESP(fish)
         end
     end
+
     return getgenv().toggleFish
 end)
 
-createToggle("Auto Reel", 120, function()
-    getgenv().AutoReel = not getgenv().AutoReel
-    return getgenv().AutoReel
-end)
-
--------------------------------------------------
--- LIVE FISH UPDATE
--------------------------------------------------
+-------------------------
+-- FISH LIVE UPDATE
+-------------------------
 if fishes then
-    fishes.ChildAdded:Connect(function(fish)
+    fishes.ChildAdded:Connect(function(child)
         task.wait(0.4)
         if getgenv().toggleFish then
-            applyFishESP(fish)
+            applyFishESP(child)
         end
     end)
 
-    fishes.ChildRemoved:Connect(function(fish)
-        if getgenv().ESP_Table.CreatedUI[fish] then
-            getgenv().ESP_Table.CreatedUI[fish]:Destroy()
-            getgenv().ESP_Table.CreatedUI[fish] = nil
+    fishes.ChildRemoved:Connect(function(child)
+        if getgenv().ESP_Table.CreatedUI[child] then
+            getgenv().ESP_Table.CreatedUI[child]:Destroy()
+            getgenv().ESP_Table.CreatedUI[child] = nil
         end
     end)
 end
