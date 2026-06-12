@@ -1,7 +1,8 @@
 --==============================================================
 -- CHARACTER TWEEN + GUI (Executor / Xeno) - COMBAT SAFE
 -- Title: Made by Jha.GGWP
--- Features: Rejoin, Anti-AFK, Anti-Cheat, Toggle GUI button
+-- Features: Rejoin, Anti-AFK, Anti-Cheat, Toggle GUI button,
+--           Save / Load / Replace / Delete configurations
 --==============================================================
 
 local ok, err = pcall(function()
@@ -11,6 +12,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TeleportService = game:GetService("TeleportService")
 local VirtualUser = game:GetService("VirtualUser")
+local HttpService = game:GetService("HttpService")
 
 local player = Players.LocalPlayer
 
@@ -23,11 +25,18 @@ local existingTitle = parentGui:FindFirstChild("TweenTitleGui")
 if existingTitle then existingTitle:Destroy() end
 
 --==============================================================
--- CONFIG
+-- CONFIG (current working config)
 --==============================================================
 local config = {
 	tweenSpeed = 50,   -- studs per second
 	stayTime   = 4,    -- seconds at each location
+}
+
+local locations = {
+	CFrame.new(0,   5, 0),
+	CFrame.new(20,  5, 0),
+	CFrame.new(20,  5, 20),
+	CFrame.new(0,   5, 20),
 }
 
 local function getRoot()
@@ -36,8 +45,80 @@ local function getRoot()
 end
 
 --==============================================================
+-- CONFIG PERSISTENCE (saved to executor filesystem)
+-- All configs live in one JSON file keyed by name.
+--==============================================================
+local CONFIG_FILE = "JhaGGWP_TweenConfigs.json"
+
+-- Executor file API guards (works on most executors: Synapse, Xeno, etc.)
+local hasFiles = (typeof(writefile) == "function")
+	and (typeof(readfile) == "function")
+	and (typeof(isfile) == "function")
+
+local function serializeCF(cf)
+	return { cf:GetComponents() } -- 12 numbers
+end
+
+local function deserializeCF(t)
+	return CFrame.new(unpack(t))
+end
+
+-- read the whole config store -> table { name = {tweenSpeed, stayTime, locations={...}} }
+local function loadStore()
+	if not hasFiles then return {} end
+	if not isfile(CONFIG_FILE) then return {} end
+	local raw = readfile(CONFIG_FILE)
+	local good, data = pcall(function() return HttpService:JSONDecode(raw) end)
+	if good and type(data) == "table" then return data end
+	return {}
+end
+
+local function saveStore(store)
+	if not hasFiles then return false, "No file API on this executor" end
+	local good, raw = pcall(function() return HttpService:JSONEncode(store) end)
+	if not good then return false, "Encode failed" end
+	local wrote = pcall(function() writefile(CONFIG_FILE, raw) end)
+	return wrote
+end
+
+-- build a serializable snapshot of the current state
+local function snapshotCurrent()
+	local locs = {}
+	for i, cf in ipairs(locations) do
+		locs[i] = serializeCF(cf)
+	end
+	return {
+		tweenSpeed = config.tweenSpeed,
+		stayTime   = config.stayTime,
+		locations  = locs,
+	}
+end
+
+-- apply a stored config snapshot to the live state
+local function applySnapshot(snap)
+	if type(snap) ~= "table" then return end
+	config.tweenSpeed = tonumber(snap.tweenSpeed) or config.tweenSpeed
+	config.stayTime   = tonumber(snap.stayTime)   or config.stayTime
+	local locs = {}
+	if type(snap.locations) == "table" then
+		for i, t in ipairs(snap.locations) do
+			local good, cf = pcall(deserializeCF, t)
+			if good then locs[i] = cf end
+		end
+	end
+	locations = locs
+end
+
+local function listConfigNames()
+	local store = loadStore()
+	local names = {}
+	for name in pairs(store) do names[#names + 1] = name end
+	table.sort(names)
+	return names
+end
+
+--==============================================================
 -- ANTI-AFK / ANTI-IDLE
--- Defeats the 20-minute idle kick by simulating input.
 --==============================================================
 do
 	if _G.__TweenIdleConn then pcall(function() _G.__TweenIdleConn:Disconnect() end) end
@@ -51,9 +132,7 @@ do
 end
 
 --==============================================================
--- ANTI-CHEAT (kill velocity + keep humanoid alive each frame)
--- Toggleable. Prevents fling / ragdoll while we override CFrame
--- so server-side checks don't flag erratic physics.
+-- ANTI-CHEAT (toggleable)
 --==============================================================
 local antiCheatOn = true
 
@@ -65,29 +144,18 @@ _G.__TweenAntiCheatConn = RunService.Heartbeat:Connect(function()
 	local root = char:FindFirstChild("HumanoidRootPart")
 	local hum = char:FindFirstChildOfClass("Humanoid")
 	if root then
-		-- damp extreme velocities that trigger anti-cheat fling detection
 		if root.AssemblyLinearVelocity.Magnitude > 200 then
 			root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
 		end
 		root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 	end
 	if hum and hum.PlatformStand then
-		hum.PlatformStand = false -- recover from ragdoll-based anti-cheat
+		hum.PlatformStand = false
 	end
 end)
 
 --==============================================================
--- SAVED LOCATIONS (1,2,3,4 ...)
---==============================================================
-local locations = {
-	CFrame.new(0,   5, 0),
-	CFrame.new(20,  5, 0),
-	CFrame.new(20,  5, 20),
-	CFrame.new(0,   5, 20),
-}
-
---==============================================================
--- TWEEN LOGIC (manual lerp, NO anchoring)
+-- TWEEN LOGIC
 --==============================================================
 local running = false
 
@@ -104,7 +172,7 @@ local function moveTo(targetCF)
 		elapsed = elapsed + dt
 		local alpha = math.clamp(elapsed / duration, 0, 1)
 
-		root = getRoot() -- refetch in case of respawn
+		root = getRoot()
 		root.CFrame = startCF:Lerp(targetCF, alpha)
 		root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
 		root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
@@ -155,8 +223,8 @@ gui.Parent = parentGui
 if syn and syn.protect_gui then syn.protect_gui(gui) end
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 240, 0, 360)
-frame.Position = UDim2.new(0, 20, 0.5, -180)
+frame.Size = UDim2.new(0, 250, 0, 470)
+frame.Position = UDim2.new(0, 20, 0.5, -235)
 frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 frame.BorderSizePixel = 0
 frame.Active = true
@@ -187,23 +255,34 @@ do
 	end)
 end
 
-local layout = Instance.new("UIListLayout", frame)
+-- Scrolling so everything fits
+local scroll = Instance.new("ScrollingFrame")
+scroll.Size = UDim2.new(1, 0, 1, 0)
+scroll.BackgroundTransparency = 1
+scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = 4
+scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scroll.Parent = frame
+
+local layout = Instance.new("UIListLayout", scroll)
 layout.Padding = UDim.new(0, 6)
 layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 layout.SortOrder = Enum.SortOrder.LayoutOrder
-local pad = Instance.new("UIPadding", frame)
+local pad = Instance.new("UIPadding", scroll)
 pad.PaddingTop = UDim.new(0, 10)
+pad.PaddingBottom = UDim.new(0, 10)
 
 local function makeLabel(text, order)
 	local lbl = Instance.new("TextLabel")
-	lbl.Size = UDim2.new(0, 220, 0, 24)
+	lbl.Size = UDim2.new(0, 220, 0, 22)
 	lbl.BackgroundTransparency = 1
 	lbl.Text = text
 	lbl.TextColor3 = Color3.fromRGB(235, 235, 235)
 	lbl.Font = Enum.Font.GothamBold
-	lbl.TextSize = 16
+	lbl.TextSize = 15
 	lbl.LayoutOrder = order
-	lbl.Parent = frame
+	lbl.Parent = scroll
 	return lbl
 end
 
@@ -218,13 +297,13 @@ local function makeBox(default, order)
 	box.ClearTextOnFocus = false
 	box.LayoutOrder = order
 	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
-	box.Parent = frame
+	box.Parent = scroll
 	return box
 end
 
 local function makeButton(text, color, order)
 	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.new(0, 220, 0, 34)
+	btn.Size = UDim2.new(0, 220, 0, 32)
 	btn.BackgroundColor3 = color
 	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
 	btn.Font = Enum.Font.GothamBold
@@ -232,7 +311,7 @@ local function makeButton(text, color, order)
 	btn.Text = text
 	btn.LayoutOrder = order
 	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
-	btn.Parent = frame
+	btn.Parent = scroll
 	return btn
 end
 
@@ -241,14 +320,63 @@ local speedBox = makeBox(config.tweenSpeed, 3)
 makeLabel("Stay Time (seconds)", 4)
 local stayBox = makeBox(config.stayTime, 5)
 
-local saveBtn   = makeButton("Save Current Position", Color3.fromRGB(60, 120, 200), 6)
-local clearBtn  = makeButton("Clear Saved Locations", Color3.fromRGB(120, 90, 40), 7)
-local startBtn  = makeButton("Start Tween", Color3.fromRGB(50, 150, 70), 8)
-local stopBtn   = makeButton("Stop Tween", Color3.fromRGB(170, 60, 60), 9)
-local acBtn     = makeButton("Anti-Cheat: ON", Color3.fromRGB(80, 80, 150), 10)
-local rejoinBtn = makeButton("Rejoin Server", Color3.fromRGB(150, 100, 50), 11)
-local statusLbl = makeLabel("Locations saved: " .. #locations, 12)
+local saveLocBtn = makeButton("Save Current Position", Color3.fromRGB(60, 120, 200), 6)
+local clearBtn   = makeButton("Clear Saved Locations", Color3.fromRGB(120, 90, 40), 7)
+local startBtn   = makeButton("Start Tween", Color3.fromRGB(50, 150, 70), 8)
+local stopBtn    = makeButton("Stop Tween", Color3.fromRGB(170, 60, 60), 9)
+local acBtn      = makeButton("Anti-Cheat: ON", Color3.fromRGB(80, 80, 150), 10)
+local rejoinBtn  = makeButton("Rejoin Server", Color3.fromRGB(150, 100, 50), 11)
 
+--==============================================================
+-- CONFIGURATION MANAGER UI
+--==============================================================
+makeLabel("--- Configurations ---", 12)
+local cfgNameBox = makeBox("MyConfig", 13)
+
+-- selected config display + cycle button (acts as a simple dropdown)
+local selectBtn = makeButton("Selected: (none)", Color3.fromRGB(70, 70, 90), 14)
+
+local cfgSaveBtn    = makeButton("Save Config", Color3.fromRGB(50, 150, 70), 15)
+local cfgLoadBtn    = makeButton("Load Config", Color3.fromRGB(60, 120, 200), 16)
+local cfgReplaceBtn = makeButton("Replace Config", Color3.fromRGB(180, 150, 50), 17)
+local cfgDeleteBtn  = makeButton("Delete Config", Color3.fromRGB(170, 60, 60), 18)
+
+local statusLbl = makeLabel("Locations saved: " .. #locations, 19)
+
+-- selection state for the cycle "dropdown"
+local cfgNames = listConfigNames()
+local selectedIndex = 0 -- 0 = none
+
+local function selectedName()
+	if selectedIndex >= 1 and selectedIndex <= #cfgNames then
+		return cfgNames[selectedIndex]
+	end
+	return nil
+end
+
+local function refreshConfigList(keepName)
+	cfgNames = listConfigNames()
+	if keepName then
+		selectedIndex = 0
+		for i, n in ipairs(cfgNames) do
+			if n == keepName then selectedIndex = i break end
+		end
+	elseif selectedIndex > #cfgNames then
+		selectedIndex = #cfgNames
+	end
+	local sel = selectedName()
+	selectBtn.Text = "Selected: " .. (sel or "(none)")
+end
+
+refreshConfigList()
+
+if not hasFiles then
+	statusLbl.Text = "No file API: configs won't persist"
+end
+
+--==============================================================
+-- BEHAVIOUR
+--==============================================================
 local function applyConfig()
 	local s = tonumber(speedBox.Text); local t = tonumber(stayBox.Text)
 	if s then config.tweenSpeed = s end
@@ -257,7 +385,12 @@ end
 speedBox.FocusLost:Connect(applyConfig)
 stayBox.FocusLost:Connect(applyConfig)
 
-saveBtn.MouseButton1Click:Connect(function()
+local function syncBoxes()
+	speedBox.Text = tostring(config.tweenSpeed)
+	stayBox.Text = tostring(config.stayTime)
+end
+
+saveLocBtn.MouseButton1Click:Connect(function()
 	table.insert(locations, getRoot().CFrame)
 	statusLbl.Text = "Locations saved: " .. #locations
 end)
@@ -283,6 +416,75 @@ end)
 rejoinBtn.MouseButton1Click:Connect(function()
 	statusLbl.Text = "Rejoining..."
 	rejoin()
+end)
+
+-- cycle through saved configs (tap to pick next one)
+selectBtn.MouseButton1Click:Connect(function()
+	if #cfgNames == 0 then
+		statusLbl.Text = "No saved configs yet"
+		return
+	end
+	selectedIndex = selectedIndex + 1
+	if selectedIndex > #cfgNames then selectedIndex = 1 end
+	local sel = selectedName()
+	selectBtn.Text = "Selected: " .. (sel or "(none)")
+	if sel then cfgNameBox.Text = sel end
+end)
+
+-- SAVE: create a new config under the typed name
+cfgSaveBtn.MouseButton1Click:Connect(function()
+	if not hasFiles then statusLbl.Text = "No file API on this executor" return end
+	applyConfig()
+	local name = (cfgNameBox.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if name == "" then statusLbl.Text = "Enter a config name first" return end
+	local store = loadStore()
+	if store[name] then statusLbl.Text = "Exists - use Replace instead" return end
+	store[name] = snapshotCurrent()
+	local good = saveStore(store)
+	refreshConfigList(name)
+	statusLbl.Text = good and ("Saved config: " .. name) or "Save failed"
+end)
+
+-- LOAD: apply the selected (or typed) config
+cfgLoadBtn.MouseButton1Click:Connect(function()
+	if not hasFiles then statusLbl.Text = "No file API on this executor" return end
+	local name = selectedName() or ((cfgNameBox.Text or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+	if not name or name == "" then statusLbl.Text = "Select or type a config" return end
+	local store = loadStore()
+	if not store[name] then statusLbl.Text = "Config not found: " .. name return end
+	stopLoop()
+	applySnapshot(store[name])
+	syncBoxes()
+	cfgNameBox.Text = name
+	refreshConfigList(name)
+	statusLbl.Text = "Loaded '" .. name .. "' (" .. #locations .. " locs)"
+end)
+
+-- REPLACE: overwrite an existing config with current state
+cfgReplaceBtn.MouseButton1Click:Connect(function()
+	if not hasFiles then statusLbl.Text = "No file API on this executor" return end
+	applyConfig()
+	local name = selectedName() or ((cfgNameBox.Text or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+	if not name or name == "" then statusLbl.Text = "Select or type a config" return end
+	local store = loadStore()
+	store[name] = snapshotCurrent()
+	local good = saveStore(store)
+	refreshConfigList(name)
+	statusLbl.Text = good and ("Replaced config: " .. name) or "Replace failed"
+end)
+
+-- DELETE: remove the selected (or typed) config
+cfgDeleteBtn.MouseButton1Click:Connect(function()
+	if not hasFiles then statusLbl.Text = "No file API on this executor" return end
+	local name = selectedName() or ((cfgNameBox.Text or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+	if not name or name == "" then statusLbl.Text = "Select or type a config" return end
+	local store = loadStore()
+	if not store[name] then statusLbl.Text = "Config not found: " .. name return end
+	store[name] = nil
+	local good = saveStore(store)
+	selectedIndex = 0
+	refreshConfigList()
+	statusLbl.Text = good and ("Deleted config: " .. name) or "Delete failed"
 end)
 
 --==============================================================
@@ -327,7 +529,6 @@ toggleBtn.Active = true
 toggleBtn.Parent = toggleGui
 Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 4)
 
--- drag the toggle square too (ignores click if it was actually a drag)
 do
 	local dragging, dragStart, startPos, moved
 	toggleBtn.InputBegan:Connect(function(input)
@@ -352,7 +553,7 @@ do
 		end
 	end)
 	toggleBtn.MouseButton1Click:Connect(function()
-		if moved then return end -- ignore click that was actually a drag
+		if moved then return end
 		gui.Enabled = not gui.Enabled
 	end)
 end
