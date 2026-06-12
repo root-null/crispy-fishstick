@@ -1,17 +1,16 @@
 --==============================================================
--- SIMPLE CHARACTER TWEEN + GUI (Executor / Xeno) - HARDENED
+-- SIMPLE CHARACTER TWEEN + GUI (Executor / Xeno) - COMBAT SAFE
+-- No anchoring -> damage still works during movement
 --==============================================================
 
--- Catch and print any error so you can see what's wrong in the console
 local ok, err = pcall(function()
 
 local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
 
--- Remove old copy if you re-execute
 local parentGui = (gethui and gethui()) or game:GetService("CoreGui")
 local existing = parentGui:FindFirstChild("TweenControlGui")
 if existing then existing:Destroy() end
@@ -26,7 +25,7 @@ local config = {
 
 local function getRoot()
 	local char = player.Character or player.CharacterAdded:Wait()
-	return char:WaitForChild("HumanoidRootPart")
+	return char:WaitForChild("HumanoidRootPart"), char
 end
 
 --==============================================================
@@ -40,20 +39,36 @@ local locations = {
 }
 
 --==============================================================
--- TWEEN LOGIC
+-- TWEEN LOGIC (manual lerp, NO anchoring)
 --==============================================================
 local running = false
-local currentTween = nil
 
-local function tweenTo(cframe)
+-- Moves the root toward target CFrame each frame without anchoring,
+-- so the character stays "alive" and damage/hitboxes keep working.
+local function moveTo(targetCF)
 	local root = getRoot()
-	root.Anchored = true
-	local distance = (root.Position - cframe.Position).Magnitude
+	local distance = (root.Position - targetCF.Position).Magnitude
 	local duration = distance / math.max(config.tweenSpeed, 0.01)
-	local info = TweenInfo.new(duration, Enum.EasingStyle.Linear)
-	currentTween = TweenService:Create(root, info, { CFrame = cframe })
-	currentTween:Play()
-	currentTween.Completed:Wait()
+
+	local elapsed = 0
+	local startCF = root.CFrame
+
+	while elapsed < duration and running do
+		local dt = RunService.Heartbeat:Wait()
+		elapsed = elapsed + dt
+		local alpha = math.clamp(elapsed / duration, 0, 1)
+
+		root = getRoot() -- refetch in case of respawn
+		-- Set CFrame directly and kill velocity so physics doesn't fling us,
+		-- but we never anchor, so combat stays active.
+		root.CFrame = startCF:Lerp(targetCF, alpha)
+		root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+		root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+	end
+
+	if running then
+		getRoot().CFrame = targetCF
+	end
 end
 
 local function startLoop()
@@ -63,20 +78,16 @@ local function startLoop()
 		while running do
 			for _, cf in ipairs(locations) do
 				if not running then break end
-				tweenTo(cf)
+				moveTo(cf)
 				if not running then break end
 				task.wait(config.stayTime)
 			end
 		end
-		local r = getRoot(); if r then r.Anchored = false end
 	end)
 end
 
 local function stopLoop()
 	running = false
-	if currentTween then currentTween:Cancel() currentTween = nil end
-	local s, r = pcall(getRoot)
-	if s and r then r.Anchored = false end
 end
 
 --==============================================================
@@ -88,7 +99,6 @@ gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.DisplayOrder = 999
 gui.Parent = parentGui
--- Some executors need this to keep the gui visible/protected
 if syn and syn.protect_gui then syn.protect_gui(gui) end
 
 local frame = Instance.new("Frame")
@@ -100,7 +110,7 @@ frame.Active = true
 frame.Parent = gui
 Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
 
--- Manual dragging (replaces deprecated Frame.Draggable)
+-- Manual dragging
 do
 	local dragging, dragStart, startPos
 	frame.InputBegan:Connect(function(input)
@@ -212,9 +222,9 @@ stopBtn.MouseButton1Click:Connect(function()
 	statusLbl.Text = "Stopped. Saved: " .. #locations
 end)
 
-print("[TweenGui] Loaded. Parented to:", parentGui.Name)
+print("[TweenGui] Loaded (combat-safe). Parented to:", parentGui.Name)
 
-end) -- end pcall
+end)
 
 if not ok then
 	warn("[TweenGui] ERROR: " .. tostring(err))
