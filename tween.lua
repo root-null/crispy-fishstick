@@ -1,11 +1,10 @@
 --==============================================================
--- SIMPLE TWEEN SYSTEM WITH GUI
--- Tweens a part through saved locations, waiting at each one.
+-- SIMPLE CHARACTER TWEEN SYSTEM WITH GUI (Executor / Xeno)
+-- Tweens YOUR character through saved locations, waiting at each.
 --==============================================================
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 
@@ -13,19 +12,22 @@ local player = Players.LocalPlayer
 -- CONFIG (defaults, editable in the GUI)
 --==============================================================
 local config = {
-	tweenSpeed = 16,   -- studs per second
+	tweenSpeed = 50,   -- studs per second
 	stayTime   = 4,    -- seconds to wait at each location
 }
 
--- The object we move. Change this to whatever you want to tween.
-local target = workspace:WaitForChild("TweenPart")
+--==============================================================
+-- CHARACTER HELPERS
+--==============================================================
+local function getRoot()
+	local char = player.Character or player.CharacterAdded:Wait()
+	return char:WaitForChild("HumanoidRootPart"), char
+end
 
 --==============================================================
--- SAVED LOCATIONS
--- You can pre-fill these, or save them live from the GUI.
+-- SAVED LOCATIONS (Location 1, 2, 3, 4 ...) as CFrames
 --==============================================================
 local locations = {
-	-- Location 1, 2, 3, 4 ...  (CFrame values)
 	CFrame.new(0,   5, 0),
 	CFrame.new(20,  5, 0),
 	CFrame.new(20,  5, 20),
@@ -39,12 +41,15 @@ local running = false
 local currentTween = nil
 
 local function tweenTo(cframe)
-	-- distance / speed = time, so speed stays constant regardless of distance
-	local distance = (target.Position - cframe.Position).Magnitude
+	local root = getRoot()
+	-- Anchor so physics/walking doesn't fight the tween
+	root.Anchored = true
+
+	local distance = (root.Position - cframe.Position).Magnitude
 	local duration = distance / math.max(config.tweenSpeed, 0.01)
 
 	local info = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
-	currentTween = TweenService:Create(target, info, { CFrame = cframe })
+	currentTween = TweenService:Create(root, info, { CFrame = cframe })
 	currentTween:Play()
 	currentTween.Completed:Wait()
 end
@@ -59,9 +64,12 @@ local function startLoop()
 				if not running then break end
 				tweenTo(cf)                 -- move to location i
 				if not running then break end
-				task.wait(config.stayTime)  -- stay before going to next
+				task.wait(config.stayTime)  -- stay before next
 			end
 		end
+		-- restore physics when stopped
+		local root = getRoot()
+		root.Anchored = false
 	end)
 end
 
@@ -71,6 +79,8 @@ local function stopLoop()
 		currentTween:Cancel()
 		currentTween = nil
 	end
+	local ok, root = pcall(getRoot)
+	if ok and root then root.Anchored = false end
 end
 
 --==============================================================
@@ -79,11 +89,15 @@ end
 local gui = Instance.new("ScreenGui")
 gui.Name = "TweenControlGui"
 gui.ResetOnSpawn = false
-gui.Parent = player:WaitForChild("PlayerGui")
+-- Executors usually expose gethui(); fall back to CoreGui / PlayerGui
+local parentGui = (gethui and gethui())
+	or (game:GetService("CoreGui"))
+	or player:WaitForChild("PlayerGui")
+gui.Parent = parentGui
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 240, 0, 320)
-frame.Position = UDim2.new(0, 20, 0.5, -160)
+frame.Size = UDim2.new(0, 240, 0, 330)
+frame.Position = UDim2.new(0, 20, 0.5, -165)
 frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 frame.BorderSizePixel = 0
 frame.Active = true
@@ -104,7 +118,6 @@ local padding = Instance.new("UIPadding")
 padding.PaddingTop = UDim.new(0, 10)
 padding.Parent = frame
 
--- helper to make a label
 local function makeLabel(text, order)
 	local lbl = Instance.new("TextLabel")
 	lbl.Size = UDim2.new(0, 220, 0, 24)
@@ -118,7 +131,6 @@ local function makeLabel(text, order)
 	return lbl
 end
 
--- helper to make a text box
 local function makeBox(default, order)
 	local box = Instance.new("TextBox")
 	box.Size = UDim2.new(0, 220, 0, 30)
@@ -136,7 +148,6 @@ local function makeBox(default, order)
 	return box
 end
 
--- helper to make a button
 local function makeButton(text, color, order)
 	local btn = Instance.new("TextButton")
 	btn.Size = UDim2.new(0, 220, 0, 34)
@@ -154,7 +165,7 @@ local function makeButton(text, color, order)
 	return btn
 end
 
-makeLabel("Tween Controls", 1)
+makeLabel("Character Tween", 1)
 
 makeLabel("Tween Speed (studs/sec)", 2)
 local speedBox = makeBox(config.tweenSpeed, 3)
@@ -162,7 +173,6 @@ local speedBox = makeBox(config.tweenSpeed, 3)
 makeLabel("Stay Time (seconds)", 4)
 local stayBox = makeBox(config.stayTime, 5)
 
--- Save current part position into the next location slot
 local saveBtn  = makeButton("Save Current Position", Color3.fromRGB(60, 120, 200), 6)
 local clearBtn = makeButton("Clear Saved Locations", Color3.fromRGB(120, 90, 40), 7)
 local startBtn = makeButton("Start Tween", Color3.fromRGB(50, 150, 70), 8)
@@ -184,7 +194,8 @@ speedBox.FocusLost:Connect(applyConfig)
 stayBox.FocusLost:Connect(applyConfig)
 
 saveBtn.MouseButton1Click:Connect(function()
-	table.insert(locations, target.CFrame)
+	local root = getRoot()
+	table.insert(locations, root.CFrame)   -- save your character's current spot
 	statusLbl.Text = "Locations saved: " .. #locations
 end)
 
